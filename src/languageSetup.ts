@@ -14,6 +14,25 @@ import { ServerSetupParams } from "./setupParams";
 import { RunDebugCodeLens } from "./runDebugCodeLens";
 import { MainClassRequest, OverrideMemberRequest } from "./lspExtensions";
 
+type TServerDebugConfig = {
+    is_enabled: boolean,
+    auto_suspend: boolean,
+    port: number,
+}
+
+enum TransportLayer {
+    STDIO = "stdio",
+    TCP = "tcp",
+    TCP_RANDOM = "tcp-random",
+    TCP_ATTACH = "tcp-attach"
+}
+
+// handle tcp
+// - handle tcp launch
+// - handle tcp attach
+// handle stdio
+
+
 /** Downloads and starts the language server. */
 export async function activateLanguageServer({ context, status, config, javaInstallation, javaOpts }: ServerSetupParams): Promise<KotlinApi> {
     LOG.info('Activating Kotlin Language Server...');
@@ -37,34 +56,6 @@ export async function activateLanguageServer({ context, status, config, javaInst
 
     const outputChannel = vscode.window.createOutputChannel("Kotlin");
     context.subscriptions.push(outputChannel);
-    
-    const transportLayer = config.get("languageServer.transport");
-    let tcpPort: number = null;
-    let env: any = { ...process.env };
-
-    if (javaInstallation.javaHome) {
-        env['JAVA_HOME'] = javaInstallation.javaHome;
-    }
-
-    if (javaOpts) {
-        env['JAVA_OPTS'] = javaOpts;
-    }
-
-    if (transportLayer == "tcp") {
-        tcpPort = config.get("languageServer.port");
-        
-        LOG.info(`Connecting via TCP, port: ${tcpPort}`);
-    } else if (transportLayer == "stdio") {
-        LOG.info("Connecting via Stdio.");
-
-        if (config.get("languageServer.debugAttach.enabled")) {
-            const autoSuspend = config.get("languageServer.debugAttach.autoSuspend");
-            const attachPort = config.get("languageServer.debugAttach.port");
-            env['KOTLIN_LANGUAGE_SERVER_OPTS'] = `-Xdebug -agentlib:jdwp=transport=dt_socket,address=${attachPort},server=y,quiet=y,suspend=${autoSuspend ? "y" : "n"}`;
-        }
-    } else {
-        LOG.info(`Unknown transport layer: ${transportLayer}`);
-    }
 
     status.dispose();
     
@@ -85,8 +76,69 @@ export async function activateLanguageServer({ context, status, config, javaInst
         "**/settings.gradle"
     ];
 
-    const options = { outputChannel, startScriptPath, tcpPort, env, storagePath, fileEventsGlobPatterns };
-    const languageClient = createLanguageClient(options);
+    // do not move into dedicated function
+    // or it would break abstractions
+    let transportLayer: TransportLayer = config.get("languageServer.transport");
+    const serverOptions: ServerOptions = (() => {
+        if (TransportLayer[transportLayer] == undefined) {
+
+            const DEFAULT_TRANSPORT_LAYER = TransportLayer.STDIO;
+            LOG.info(`Unknown transport layer: ${transportLayer}. Falling back to default: ${DEFAULT_TRANSPORT_LAYER}`);
+
+            config.update("languageServer.transport", DEFAULT_TRANSPORT_LAYER);
+            transportLayer = DEFAULT_TRANSPORT_LAYER
+        }
+
+        if (transportLayer != TransportLayer.TCP_ATTACH && isOSUnixoid()) {
+            // Ensure that start script can be executed
+            const current_mode = fs.statSync(startScriptPath).mode & 0o777
+            fs.chmodSync(startScriptPath, current_mode | fs.constants.S_IXUSR)
+        }
+
+        if (transportLayer == TransportLayer.STDIO) {
+            LOG.info("Connecting via Stdio.");
+
+            const debugConfig: TServerDebugConfig = {
+                is_enabled: config.get("languageServer.debugAttach.enabled"),
+                auto_suspend: config.get("languageServer.debugAttach.autoSuspend"),
+                port: config.get("languageServer.debugAttach.port")
+            };
+
+            const env: any = { ...process.env };
+
+            if (javaInstallation.javaHome) {
+                env['JAVA_HOME'] = javaInstallation.javaHome;
+            }
+        
+            if (javaOpts) {
+                env['JAVA_OPTS'] = javaOpts;
+            }
+
+            return stdio_launch(startScriptPath, env, debugConfig);
+        }
+        
+        if (transportLayer == TransportLayer.TCP) {
+            // TCP STARTING PROCEDURE
+            // Create TCP Server on vscode's side
+            // start server and await it to connect
+            // create language client on vscode's side and 
+            // delegate connection with server to it
+            const tcpPort: number = config.get("languageServer.port");
+
+            LOG.info(`Connecting via TCP, port: ${tcpPort}`);
+            return () => tcp_launch(outputChannel, startScriptPath,tcpPort)
+        }
+
+        if (transportLayer == TransportLayer.TCP_RANDOM) {
+            return () => tcp_launch(outputChannel, startScriptPath, null);
+        }
+
+        if (transportLayer == TransportLayer.TCP_ATTACH) {
+            
+        }
+    })()
+
+    const languageClient = createLanguageClient(outputChannel, serverOptions, storagePath, fileEventsGlobPatterns);
 
     // Create the language client and start the client.
     let languageClientPromise = languageClient.start();
@@ -172,14 +224,12 @@ export async function activateLanguageServer({ context, status, config, javaInst
     return new KotlinApi(languageClient);
 }
 
-function createLanguageClient(options: {
+function createLanguageClient(
     outputChannel: vscode.OutputChannel,
-    startScriptPath: string,
-    tcpPort?: number,
-    env?: any,
+    serverOptions: ServerOptions,
     storagePath: string,
     fileEventsGlobPatterns: string[]
-}): LanguageClient {
+): LanguageClient {
     // Options to control the language client
     const clientOptions: LanguageClientOptions = {
         // Register the server for Kotlin documents
@@ -193,110 +243,80 @@ function createLanguageClient(options: {
             configurationSection: 'kotlin',
             // Notify the server about file changes to 'javaconfig.json' files contain in the workspace
             // TODO this should be registered from the language server side
-            fileEvents: options.fileEventsGlobPatterns.map(
-                function (globPattern: string): vscode.FileSystemWatcher {
+            fileEvents: fileEventsGlobPatterns.map(
+                (globPattern: string): vscode.FileSystemWatcher => {
                     return vscode.workspace.createFileSystemWatcher(globPattern)
                 }
             )
         },
         progressOnInitialization: true,
-        outputChannel: options.outputChannel,
+        outputChannel: outputChannel,
         revealOutputChannelOn: RevealOutputChannelOn.Never,
+        // this is sent to the server
         initializationOptions: {
-            storagePath: options.storagePath
+            storagePath,
         }
-    }
-    
-    // Ensure that start script can be executed
-    if (isOSUnixoid()) {
-        child_process.exec(`chmod +x ${options.startScriptPath}`);
-    }
-
-    // Start the child Java process
-    let serverOptions: ServerOptions;
-    
-    if (options.tcpPort) {
-        serverOptions = () => spawnLanguageServerProcessAndConnectViaTcp(options);
-    } else {
-        serverOptions = {
-            command: options.startScriptPath,
-            args: [],
-            options: {
-                cwd: vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath,
-                env: options.env
-            } // TODO: Support multi-root workspaces (and improve support for when no available is available)
-        }
-        LOG.info("Creating client at {}", options.startScriptPath);
     }
 
     return new LanguageClient("kotlin", "Kotlin Language Client", serverOptions, clientOptions);
 }
 
-export function spawnLanguageServerProcessAndConnectViaTcp(options: {
+/**
+ * 
+ * @param outputChannel 
+ * @param startScriptPath 
+ * @param tcpPort `null` for random port
+ * @returns 
+ */
+function tcp_launch(
     outputChannel: vscode.OutputChannel,
     startScriptPath: string,
-    tcpPort?: number
-}): Promise<StreamInfo> {
+    tcpPort: number | null
+): Promise<StreamInfo> {
     return new Promise((resolve, reject) => {
         LOG.info("Creating server.")
+
+        // You can't have two client sockets connect to each other
+        // so need server to establish connection to a single client
         const server = net.createServer(socket => {
             LOG.info("Closing server since client has connected.");
+            // do not accept new and keep existing connections
             server.close();
             resolve({ reader: socket, writer: socket });
         });
-        // Wait for the first client to connect
-        server.listen(options.tcpPort, () => {
+
+        // callback is executed once server is ready to accept connections
+        server.listen(tcpPort, () => {
             const tcpPort = (server.address() as net.AddressInfo).port.toString();
-            const proc = child_process.spawn(options.startScriptPath, ["--tcpClientPort", tcpPort]);
-            LOG.info("Creating client at {} via TCP port {}", options.startScriptPath, tcpPort);
+            const proc = child_process.spawn(startScriptPath, ["--tcpClientPort", tcpPort]);
+            LOG.info("Creating client at {} via TCP port {}", startScriptPath, tcpPort);
             
-            const outputCallback = data => options.outputChannel.append(`${data}`);
+            const outputCallback = data => outputChannel.append(`${data}`);
             proc.stdout.on("data", outputCallback);
             proc.stderr.on("data", outputCallback);
-            proc.on("exit", (code, sig) => options.outputChannel.appendLine(`The language server exited, code: ${code}, signal: ${sig}`))
+            proc.on("exit", (code, sig) => outputChannel.appendLine(`The language server exited, code: ${code}, signal: ${sig}`))
         });
         server.on("error", e => reject(e));
     });
 }
 
-export function configureLanguage(): void {
-    // Source: https://github.com/Microsoft/vscode/blob/9d611d4dfd5a4a101b5201b8c9e21af97f06e7a7/extensions/typescript/src/typescriptMain.ts#L186
-    // License: https://github.com/Microsoft/vscode/blob/9d611d4dfd5a4a101b5201b8c9e21af97f06e7a7/extensions/typescript/OSSREADME.json
-    vscode.languages.setLanguageConfiguration("kotlin", {
-        indentationRules: {
-            // ^(.*\*/)?\s*\}.*$
-            decreaseIndentPattern: /^(.*\*\/)?\s*\}.*$/,
-            // ^.*\{[^}"']*$
-            increaseIndentPattern: /^.*\{[^}"']*$/
-        },
-        wordPattern: /(-?\d*\.\d\w*)|([^\`\~\!\@\#\%\^\&\*\(\)\-\=\+\[\{\]\}\\\|\;\:\'\"\,\.\<\>\/\?\s]+)/g,
-        onEnterRules: [
-            {
-                // e.g. /** | */
-                beforeText: /^\s*\/\*\*(?!\/)([^\*]|\*(?!\/))*$/,
-                afterText: /^\s*\*\/$/,
-                action: { indentAction: vscode.IndentAction.IndentOutdent, appendText: ' * ' }
-            },
-            {
-                // e.g. /** ...|
-                beforeText: /^\s*\/\*\*(?!\/)([^\*]|\*(?!\/))*$/,
-                action: { indentAction: vscode.IndentAction.None, appendText: ' * ' }
-            },
-            {
-                // e.g.  * ...|
-                beforeText: /^(\t|(\ \ ))*\ \*(\ ([^\*]|\*(?!\/))*)?$/,
-                action: { indentAction: vscode.IndentAction.None, appendText: '* ' }
-            },
-            {
-                // e.g.  */|
-                beforeText: /^(\t|(\ \ ))*\ \*\/\s*$/,
-                action: { indentAction: vscode.IndentAction.None, removeText: 1 }
-            },
-            {
-                // e.g.  *-----*/|
-                beforeText: /^(\t|(\ \ ))*\ \*[^/]*\*\/\s*$/,
-                action: { indentAction: vscode.IndentAction.None, removeText: 1 }
-            }
-        ]
-    });
+// function tcp_attach(): ServerOptions {
+
+// }
+
+function stdio_launch(startPath: string, env: any, debugConfiguration: TServerDebugConfig): ServerOptions {
+    if (debugConfiguration.is_enabled) {
+        env['KOTLIN_LANGUAGE_SERVER_OPTS'] = `-Xdebug -agentlib:jdwp=transport=dt_socket,address=${debugConfiguration.port},server=y,quiet=y,suspend=${debugConfiguration.auto_suspend ? "y" : "n"}`;
+    }
+
+    return {
+        command: startPath,
+        args: [],
+        options: {
+            cwd: vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath,
+            env: env
+        } // TODO: Support multi-root workspaces (and improve support for when no available is available)
+    }
 }
+
+

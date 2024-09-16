@@ -231,15 +231,31 @@
                     "type": "string",
                     "enum": [
                         "stdio",
-                        "tcp"
+                        "tcp",
+                        "tcp-random",
+                        "tcp-attach"
                     ],
-                    "description": "The transport layer beneath the language server protocol. Note that the extension will launch the server even if a TCP socket is used.",
+                    "enumItemLabels": [
+                        null,
+                        null,
+                        "TCP with Random Port",
+                        "TCP Attach"
+                    ],
+                    "enumDescription": [
+                        "Launch and connect via stdio",
+                        "Launch and connect via tcp",
+                        "Launch server with random tcp port and connect",
+                        "Do NOT launch. Attach to a running process of wait for it on tcp #kotlin.languageServer.port#"
+                    ],
+                    "description": "The transport layer beneath the language server protocol and connection mode.",
                     "default": "stdio"
                 },
                 "kotlin.languageServer.port": {
                     "type": "integer",
-                    "description": "The port to which the client will attempt to connect to. A random port is used if zero. Only used if the transport layer is TCP.",
-                    "default": 0
+                    "description": "The port to which the client will attempt to connect to. Zero value is forbidden",
+                    "default": 7721,
+                    "minimum": 1,
+                    "maximum": 65536
                 },
                 "kotlin.languageServer.debugAttach.enabled": {
                     "type": "boolean",
@@ -297,7 +313,12 @@
                 "kotlin.diagnostics.level": {
                     "type": "string",
                     "default": "hint",
-                    "enum": ["error", "warning", "information", "hint"],
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint"
+                    ],
                     "description": "The minimum severity of diagnostics to emit."
                 },
                 "kotlin.diagnostics.debounceTime": {

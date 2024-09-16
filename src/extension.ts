@@ -5,7 +5,7 @@ import * as vscode from 'vscode';
 import { registerDebugAdapter } from './debugSetup';
 import { InternalConfigManager } from './internalConfig';
 import { findJavaInstallation, findJavaOpts } from './javaSetup';
-import { activateLanguageServer, configureLanguage } from './languageSetup';
+import { activateLanguageServer } from './languageSetup';
 import { KotlinApi } from './lspExtensions';
 import { ServerSetupParams } from './setupParams';
 import { fsExists } from './util/fsUtils';
@@ -14,7 +14,7 @@ import { Status, StatusBarEntry } from './util/status';
 
 // this method is called when your extension is activated
 // your extension is activated the very first time the command is executed
-export async function activate(context: vscode.ExtensionContext): Promise<ExtensionApi> {
+export async function activate(context: vscode.ExtensionContext) {
     configureLanguage();
 
     const kotlinConfig = vscode.workspace.getConfiguration("kotlin");
@@ -66,12 +66,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<Extens
         javaInstallation,
         javaOpts
     });
-
-    let extensionApi = new ExtensionApi();
     
     if (langServerEnabled) {
+        // this should be reentrant
+        // when connection is dropped (how to know this?)
+        // consider the server as dead. Await for new connection
         initTasks.push(withSpinningStatus(context, async status => {
-            extensionApi.kotlinApi = await activateLanguageServer(setupParams(status));
+            await activateLanguageServer(setupParams(status));
         }));
     } else {
         LOG.info("Skipping language server activation since 'kotlin.languageServer.enabled' is false");
@@ -86,8 +87,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<Extens
     }
     
     await Promise.all(initTasks);
-
-    return extensionApi;
 }
 
 async function withSpinningStatus(context: vscode.ExtensionContext, action: (status: Status) => Promise<void>): Promise<void> {
@@ -100,10 +99,45 @@ async function withSpinningStatus(context: vscode.ExtensionContext, action: (sta
 // this method is called when your extension is deactivated
 export function deactivate(): void {}
 
-class ExtensionApi {
-    kotlinApi?: KotlinApi;
-
-    async getBuildOutputPath(): Promise<string> {
-        return await this.kotlinApi?.getBuildOutputLocation();
-    }
+function configureLanguage(): void {
+    // Source: https://github.com/Microsoft/vscode/blob/9d611d4dfd5a4a101b5201b8c9e21af97f06e7a7/extensions/typescript/src/typescriptMain.ts#L186
+    // License: https://github.com/Microsoft/vscode/blob/9d611d4dfd5a4a101b5201b8c9e21af97f06e7a7/extensions/typescript/OSSREADME.json
+    vscode.languages.setLanguageConfiguration("kotlin", {
+        indentationRules: {
+            // ^(.*\*/)?\s*\}.*$
+            decreaseIndentPattern: /^(.*\*\/)?\s*\}.*$/,
+            // ^.*\{[^}"']*$
+            increaseIndentPattern: /^.*\{[^}"']*$/
+        },
+        wordPattern: /(-?\d*\.\d\w*)|([^\`\~\!\@\#\%\^\&\*\(\)\-\=\+\[\{\]\}\\\|\;\:\'\"\,\.\<\>\/\?\s]+)/g,
+        onEnterRules: [
+            {
+                // e.g. /** | */
+                beforeText: /^\s*\/\*\*(?!\/)([^\*]|\*(?!\/))*$/,
+                afterText: /^\s*\*\/$/,
+                action: { indentAction: vscode.IndentAction.IndentOutdent, appendText: ' * ' }
+            },
+            {
+                // e.g. /** ...|
+                beforeText: /^\s*\/\*\*(?!\/)([^\*]|\*(?!\/))*$/,
+                action: { indentAction: vscode.IndentAction.None, appendText: ' * ' }
+            },
+            {
+                // e.g.  * ...|
+                beforeText: /^(\t|(\ \ ))*\ \*(\ ([^\*]|\*(?!\/))*)?$/,
+                action: { indentAction: vscode.IndentAction.None, appendText: '* ' }
+            },
+            {
+                // e.g.  */|
+                beforeText: /^(\t|(\ \ ))*\ \*\/\s*$/,
+                action: { indentAction: vscode.IndentAction.None, removeText: 1 }
+            },
+            {
+                // e.g.  *-----*/|
+                beforeText: /^(\t|(\ \ ))*\ \*[^/]*\*\/\s*$/,
+                action: { indentAction: vscode.IndentAction.None, removeText: 1 }
+            }
+        ]
+    });
 }
+
