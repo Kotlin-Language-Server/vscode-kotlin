@@ -3,7 +3,8 @@ import * as fs from "fs";
 import * as net from "net";
 import * as path from "path";
 import * as vscode from 'vscode';
-import { LanguageClient, LanguageClientOptions, RevealOutputChannelOn, ServerOptions, StreamInfo } from "vscode-languageclient/node";
+import { CloseAction, LanguageClient, LanguageClientOptions, RevealOutputChannelOn, ServerOptions, StreamInfo } from "vscode-languageclient/node";
+import { BaseLanguageClient, CloseHandlerResult, ErrorAction, ErrorHandler, ErrorHandlerResult, Message } from "vscode-languageclient"
 import { LOG } from './util/logger';
 import { isOSUnixoid, correctScriptName } from './util/osUtils';
 import { ServerDownloader } from './serverDownloader';
@@ -117,13 +118,13 @@ export async function activateLanguageServer({ context, status, config, javaInst
             return stdio_launch(startScriptPath, env, debugConfig);
         }
         
+        const tcpPort: number = config.get("languageServer.port");
         if (transportLayer == TransportLayer.TCP) {
             // TCP STARTING PROCEDURE
             // Create TCP Server on vscode's side
             // start server and await it to connect
             // create language client on vscode's side and 
             // delegate connection with server to it
-            const tcpPort: number = config.get("languageServer.port");
 
             LOG.info(`Connecting via TCP, port: ${tcpPort}`);
             return () => tcp_launch(outputChannel, startScriptPath,tcpPort)
@@ -134,7 +135,11 @@ export async function activateLanguageServer({ context, status, config, javaInst
         }
 
         if (transportLayer == TransportLayer.TCP_ATTACH) {
-            
+            // when attaching, we no longer control the lifecycle of a server
+            // Thus we listen when connection is terminated 
+            // to spawn a new language-client and wait for new server connection.
+            // We can't reuse existing 
+            tcp_attach(outputChannel, tcpPort)
         }
     })()
 
@@ -226,11 +231,13 @@ export async function activateLanguageServer({ context, status, config, javaInst
 
 function createLanguageClient(
     outputChannel: vscode.OutputChannel,
-    serverOptions: ServerOptions,
+    serverConnectionOptions: ServerOptions,
     storagePath: string,
     fileEventsGlobPatterns: string[]
 ): LanguageClient {
     // Options to control the language client
+    // default error handler reconnects to a server
+    // if connection is not repeatedly lost over 3 seconds
     const clientOptions: LanguageClientOptions = {
         // Register the server for Kotlin documents
         documentSelector: [
@@ -255,10 +262,10 @@ function createLanguageClient(
         // this is sent to the server
         initializationOptions: {
             storagePath,
-        }
+        },
     }
 
-    return new LanguageClient("kotlin", "Kotlin Language Client", serverOptions, clientOptions);
+    return new LanguageClient("kotlin", "Kotlin Language Client", serverConnectionOptions, clientOptions);
 }
 
 /**
@@ -300,9 +307,30 @@ function tcp_launch(
     });
 }
 
-// function tcp_attach(): ServerOptions {
+function tcp_attach(
+    outputChannel: vscode.OutputChannel,
+    tcpPort: number
+): ServerOptions {
+    const server = net.createServer()
+    server.listen(tcpPort)
 
-// }
+    // returned function is called during every start, recreating connection
+    return () => {
+        return new Promise((resolve, _reject) => {
+            server.removeAllListeners("connect")
+            
+            const connection_listener = (socket: net.Socket) => {
+                socket.once("close", () => {
+                    server.removeListener("connect", connection_listener)
+                })
+                
+                resolve({ reader: socket, writer: socket })
+            }
+
+            server.once("connection", connection_listener)
+        })
+    }
+}
 
 function stdio_launch(startPath: string, env: any, debugConfiguration: TServerDebugConfig): ServerOptions {
     if (debugConfiguration.is_enabled) {
