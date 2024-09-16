@@ -3,8 +3,7 @@ import * as fs from "fs";
 import * as net from "net";
 import * as path from "path";
 import * as vscode from 'vscode';
-import { CloseAction, LanguageClient, LanguageClientOptions, RevealOutputChannelOn, ServerOptions, StreamInfo } from "vscode-languageclient/node";
-import { BaseLanguageClient, CloseHandlerResult, ErrorAction, ErrorHandler, ErrorHandlerResult, Message } from "vscode-languageclient"
+import { LanguageClient, LanguageClientOptions, RevealOutputChannelOn, ServerOptions, StreamInfo } from "vscode-languageclient/node";
 import { LOG } from './util/logger';
 import { isOSUnixoid, correctScriptName } from './util/osUtils';
 import { ServerDownloader } from './serverDownloader';
@@ -308,7 +307,7 @@ function tcp_launch(
 }
 
 function tcp_attach(
-    outputChannel: vscode.OutputChannel,
+    _outputChannel: vscode.OutputChannel,
     tcpPort: number
 ): ServerOptions {
     const server = net.createServer()

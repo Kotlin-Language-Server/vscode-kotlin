@@ -6,7 +6,6 @@ import { registerDebugAdapter } from './debugSetup';
 import { InternalConfigManager } from './internalConfig';
 import { findJavaInstallation, findJavaOpts } from './javaSetup';
 import { activateLanguageServer } from './languageSetup';
-import { KotlinApi } from './lspExtensions';
 import { ServerSetupParams } from './setupParams';
 import { fsExists } from './util/fsUtils';
 import { LOG } from './util/logger';
