@@ -1,4 +1,4 @@
-import { RequestType0, RequestType } from "vscode-jsonrpc";
+import { RequestType0, RequestType } from "vscode-languageclient";
 import { TextDocumentIdentifier, TextDocumentPositionParams } from "vscode-languageclient";
 import { LanguageClient } from "vscode-languageclient/node";
 
