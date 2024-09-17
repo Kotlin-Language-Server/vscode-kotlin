@@ -80,8 +80,8 @@ export async function activateLanguageServer({ context, status, config, javaInst
     // or it would break abstractions
     let transportLayer: TransportLayer = config.get("languageServer.transport");
     const serverOptions: ServerOptions = (() => {
-        if (TransportLayer[transportLayer] == undefined) {
-
+        LOG.warn(`${transportLayer}: ${TransportLayer[transportLayer]}`)
+        if (!Object.values(TransportLayer).includes(transportLayer)) {
             const DEFAULT_TRANSPORT_LAYER = TransportLayer.STDIO;
             LOG.info(`Unknown transport layer: ${transportLayer}. Falling back to default: ${DEFAULT_TRANSPORT_LAYER}`);
 
@@ -316,11 +316,11 @@ function tcp_attach(
     // returned function is called during every start, recreating connection
     return () => {
         return new Promise((resolve, _reject) => {
-            server.removeAllListeners("connect")
+            server.removeAllListeners("connection")
             
             const connection_listener = (socket: net.Socket) => {
                 socket.once("close", () => {
-                    server.removeListener("connect", connection_listener)
+                    server.removeListener("connection", connection_listener)
                 })
                 
                 resolve({ reader: socket, writer: socket })
