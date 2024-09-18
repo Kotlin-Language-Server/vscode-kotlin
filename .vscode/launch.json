@@ -5,11 +5,9 @@
             "name": "Extension",
             "type": "extensionHost",
             "request": "launch",
-            "pauseForSourceMap": true,
             "runtimeExecutable": "${execPath}",
-            "cwd": "${workspaceFolder}/dist",
             "args": [
-                "--extensionDevelopmentPath=${workspaceFolder}"
+                "--extensionDevelopmentPath=${workspaceFolder}",
             ],
             "sourceMaps": true,
         },

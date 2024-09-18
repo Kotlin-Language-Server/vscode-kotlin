@@ -9,7 +9,6 @@ module.exports = {
         path: path.resolve(__dirname, "dist"), // the bundle is stored in the 'dist' folder (see the package.json), 📖 -> https://webpack.js.org/configuration/output/
         filename: "extension.js",
         libraryTarget: "commonjs2",
-        devtoolModuleFilenameTemplate: "../[resource-path]"
     },
     devtool: "source-map",
     externals: {
