@@ -138,7 +138,7 @@ export async function activateLanguageServer({ context, status, config, javaInst
             // Thus we listen when connection is terminated 
             // to spawn a new language-client and wait for new server connection.
             // We can't reuse existing 
-            tcp_attach(outputChannel, tcpPort)
+            return tcp_attach(outputChannel, tcpPort)
         }
     })()
 
@@ -317,8 +317,10 @@ function tcp_attach(
     return () => {
         return new Promise((resolve, _reject) => {
             server.removeAllListeners("connection")
+            LOG.info(`Establishing connection on port ${tcpPort}}`)
             
             const connection_listener = (socket: net.Socket) => {
+                LOG.info(`Connection established on port ${tcpPort}`)
                 socket.once("close", () => {
                     server.removeListener("connection", connection_listener)
                 })
